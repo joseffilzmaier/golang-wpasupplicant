@@ -122,23 +122,23 @@ func (r *scanResult) Flags() []string         { return r.flags }
 
 // ConfiguredNetwork is a configured network (from LIST_NETWORKS)
 type ConfiguredNetwork interface {
-	NetworkID() string
+	NetworkID() int
 	SSID() string
 	BSSID() string
 	Flags() []string
 }
 
 type configuredNetwork struct {
-	networkID string
+	networkID int
 	ssid      string
 	bssid     string // Since bssid can be any
 	flags     []string
 }
 
-func (r *configuredNetwork) NetworkID() string { return r.networkID }
-func (r *configuredNetwork) BSSID() string     { return r.bssid }
-func (r *configuredNetwork) SSID() string      { return r.ssid }
-func (r *configuredNetwork) Flags() []string   { return r.flags }
+func (r *configuredNetwork) NetworkID() int  { return r.networkID }
+func (r *configuredNetwork) BSSID() string   { return r.bssid }
+func (r *configuredNetwork) SSID() string    { return r.ssid }
+func (r *configuredNetwork) Flags() []string { return r.flags }
 
 type StatusResult interface {
 	WPAState() string
@@ -155,14 +155,15 @@ type statusResult struct {
 	ipAddr   string
 	ssid     string
 	address  string
-	bssid	 string
+	bssid    string
+	freq     string
 }
 
 func (s *statusResult) WPAState() string { return s.wpaState }
 func (s *statusResult) KeyMgmt() string  { return s.keyMgmt }
 func (s *statusResult) IPAddr() string   { return s.ipAddr }
 func (s *statusResult) SSID() string     { return s.ssid }
-func (s *statusResult) BSSID() string     { return s.bssid }
+func (s *statusResult) BSSID() string    { return s.bssid }
 func (s *statusResult) Address() string  { return s.address }
 
 type WPAEvent struct {
@@ -189,6 +190,10 @@ type Conn interface {
 	// configuration failed.
 	SetNetwork(int, string, string) error
 
+	// GetNetwork gets a network property. Returns error if the property
+	// retrieval failed.
+	GetNetwork(int, string) (string, error)
+
 	// EnableNetwork enables a network. Returns error if the command fails.
 	EnableNetwork(int) error
 
@@ -210,6 +215,9 @@ type Conn interface {
 	// RemoveAllNetworks removes all networks (basically running `REMOVE_NETWORK all`).
 	// Returns error if command fails.
 	RemoveAllNetworks() error
+
+	// Set sets configurations options
+	Set(name, value string) error
 
 	// SaveConfig stores the current network configuration to disk.
 	SaveConfig() error

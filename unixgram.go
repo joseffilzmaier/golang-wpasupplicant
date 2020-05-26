@@ -279,6 +279,10 @@ func (uc *unixgramConn) AddNetwork() (int, error) {
 	return strconv.Atoi(strings.Trim(b.String(), "\n"))
 }
 
+func (uc *unixgramConn) Set(name, value string) error {
+	return uc.runCommand(fmt.Sprintf("SET %s %s", name, value))
+}
+
 func (uc *unixgramConn) EnableNetwork(networkID int) error {
 	return uc.runCommand(fmt.Sprintf("ENABLE_NETWORK %d", networkID))
 }
@@ -312,17 +316,26 @@ func (uc *unixgramConn) SetNetwork(networkID int, variable string, value string)
 
 	// Since key_mgmt expects the value to not be wrapped in "" we do a little check here.
 	switch variable {
-		case "key_mgmt", "bssid": {
-			cmd = fmt.Sprintf("SET_NETWORK %d %s %s", networkID, variable, value)
-		}
-		default: {
-			cmd = fmt.Sprintf("SET_NETWORK %d %s \"%s\"", networkID, variable, value)
-		}
+	case "key_mgmt", "bssid", "mode":
+		cmd = fmt.Sprintf("SET_NETWORK %d %s %s", networkID, variable, value)
+	default:
+		cmd = fmt.Sprintf("SET_NETWORK %d %s \"%s\"", networkID, variable, value)
 	}
 
-	fmt.Println(cmd)
-
 	return uc.runCommand(cmd)
+}
+
+func (uc *unixgramConn) GetNetwork(networkId int, variable string) (string, error) {
+	data, err := uc.cmd(fmt.Sprintf("GET_NETWORK %d %s", networkId, variable))
+	if bytes.Compare(data, []byte("FAIL\n")) == 0 {
+		return "", errors.New("FAIL")
+	} else if bytes.Compare(data, []byte("FAIL-BUSY\n")) == 0 {
+		return "", errors.New("FAIL-BUSY")
+	} else if len(data) > 3 && data[0] == '"' && data[len(data)-1] == '"' {
+		return string(data[1 : len(data)-1]), nil
+	}
+
+	return string(data), err
 }
 
 func (uc *unixgramConn) SaveConfig() error {
@@ -398,9 +411,9 @@ func (uc *unixgramConn) runCommand(cmd string) error {
 
 	if bytes.Compare(resp, []byte("OK\n")) == 0 {
 		return nil
-	} else if bytes.Compare(resp, []byte("FAIL\n")) == 0{
+	} else if bytes.Compare(resp, []byte("FAIL\n")) == 0 {
 		return errors.New("FAIL")
-	} else if bytes.Compare(resp, []byte("FAIL-BUSY\n")) == 0{
+	} else if bytes.Compare(resp, []byte("FAIL-BUSY\n")) == 0 {
 		return errors.New("FAIL-BUSY")
 	}
 
@@ -436,9 +449,11 @@ func parseListNetworksResult(resp io.Reader) (res []ConfiguredNetwork, err error
 			return nil, &ParseError{Line: ln}
 		}
 
-		var networkID string
+		var networkID int
 		if networkIDCol != -1 {
-			networkID = fields[networkIDCol]
+			if networkID, err = strconv.Atoi(fields[networkIDCol]); err != nil {
+				return nil, err
+			}
 		}
 
 		var ssid string
@@ -493,7 +508,9 @@ func parseStatusResults(resp io.Reader) (StatusResult, error) {
 		case "address":
 			res.address = fields[1]
 		case "bssid":
-		 res.bssid = fields[1]
+			res.bssid = fields[1]
+		case "freq":
+			res.freq = fields[1]
 		}
 	}
 
