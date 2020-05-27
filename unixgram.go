@@ -51,6 +51,11 @@ type message struct {
 	err      error
 }
 
+type letter struct {
+	data []byte
+	done chan error
+}
+
 // unixgramConn is the implementation of Conn for the AF_UNIX SOCK_DGRAM
 // control interface.
 //
@@ -58,6 +63,7 @@ type message struct {
 type unixgramConn struct {
 	c                      *net.UnixConn
 	fd                     uintptr
+	writer                 chan letter
 	solicited, unsolicited chan message
 	wpaEvents              chan WPAEvent
 }
@@ -94,9 +100,11 @@ func Unixgram(ifName string) (Conn, error) {
 	uc.solicited = make(chan message)
 	uc.unsolicited = make(chan message)
 	uc.wpaEvents = make(chan WPAEvent)
+	uc.writer = make(chan letter)
 
 	go uc.readLoop()
 	go uc.readUnsolicited()
+	go uc.writeLoop()
 	// Issue an ATTACH command to start receiving unsolicited events.
 	err = uc.runCommand("ATTACH")
 	if err != nil {
@@ -104,6 +112,13 @@ func Unixgram(ifName string) (Conn, error) {
 	}
 
 	return uc, nil
+}
+
+func (uc *unixgramConn) writeLoop() {
+	for letter := range uc.writer {
+		_, err := uc.c.Write(letter.data)
+		letter.done <- err
+	}
 }
 
 // readLoop is spawned after we connect.  It receives messages from the
@@ -119,6 +134,9 @@ func (uc *unixgramConn) readLoop() {
 		// The actual read occurs using UnixConn.Read(), once we've
 		// allocated an appropriately-sized buffer.
 		n, _, err := syscall.Recvfrom(int(uc.fd), []byte{}, syscall.MSG_PEEK|syscall.MSG_TRUNC)
+		if n == 0 {
+			return
+		}
 		if err != nil {
 			// Treat read errors as a response to whatever command
 			// was last issued.
@@ -169,9 +187,8 @@ func (uc *unixgramConn) readLoop() {
 // into a WPAEvent. At the moment we only handle `CTRL-EVENT-*` events and only events
 // where the 'payload' is formatted with key=val.
 func (uc *unixgramConn) readUnsolicited() {
-	for {
-		mgs := <-uc.unsolicited
-		data := bytes.NewBuffer(mgs.data).String()
+	for msg := range uc.unsolicited {
+		data := bytes.NewBuffer(msg.data).String()
 
 		parts := strings.Split(data, " ")
 		if len(parts) == 0 {
@@ -208,10 +225,17 @@ func (uc *unixgramConn) readUnsolicited() {
 
 // cmd executes a command and waits for a reply.
 func (uc *unixgramConn) cmd(cmd string) ([]byte, error) {
-	// TODO: block if any other commands are running
 
-	_, err := uc.c.Write([]byte(cmd))
+	l := letter{
+		data: []byte(cmd),
+		done: make(chan error),
+	}
+	uc.writer <- l
+	err := <-l.done
 	if err != nil {
+		uc.wpaEvents <- WPAEvent{
+			Event: "TERMINATING",
+		}
 		return nil, err
 	}
 
@@ -249,11 +273,19 @@ func (uc *unixgramConn) EventQueue() chan WPAEvent {
 	return uc.wpaEvents
 }
 
+//Probably should close the connection afterwards
+func (uc *unixgramConn) Detach() error {
+	return uc.runCommand("DETACH")
+}
+
 func (uc *unixgramConn) Close() error {
-	if err := uc.runCommand("DETACH"); err != nil {
+	err := syscall.Shutdown(int(uc.fd), syscall.SHUT_RDWR)
+	close(uc.writer)
+	close(uc.solicited)
+	close(uc.unsolicited)
+	if err != nil {
 		return err
 	}
-
 	return uc.c.Close()
 }
 
